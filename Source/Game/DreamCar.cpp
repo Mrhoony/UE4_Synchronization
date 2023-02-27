@@ -1,6 +1,7 @@
 #include "DreamCar.h"
 #include "DrawDebugHelpers.h"
 #include "Net/UnrealNetwork.h"
+#include "Gameframework/GameState.h"
 
 ADreamCar::ADreamCar()
 {
@@ -12,14 +13,18 @@ ADreamCar::ADreamCar()
 void ADreamCar::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		NetUpdateFrequency = 1; // 1초에 한번, 기본값은 100
+	}
 }
 
 void ADreamCar::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(ADreamCar, ReplicatedLocation);
-	DOREPLIFETIME(ADreamCar, ReplicatedRotation);
+	DOREPLIFETIME(ADreamCar, ServerState);
 }
 
 FString GetRoleText(ENetRole InRole)
@@ -39,24 +44,16 @@ void ADreamCar::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	FVector force = GetActorForwardVector() * MaxForce * Throttle;
-	force += GetAirResistance();
-	force += GetRollingResistance();
-	FVector acceleration = force / Mass;
-	Velocity = Velocity + acceleration * DeltaTime;
-
-	UpdateRotation(DeltaTime);
-	UpdateLocation(DeltaTime);
-
-	if (HasAuthority())
+	if (GetLocalRole() == ROLE_AutonomousProxy)
 	{
-		ReplicatedLocation = GetActorLocation();
-		ReplicatedRotation = GetActorRotation();
-	}
-	else
-	{
-		SetActorLocation(ReplicatedLocation);
-		SetActorRotation(ReplicatedRotation);
+		FMoveState move = CreateMove(DeltaTime);
+		
+		SimulateMove(move);
+		UnacknowledgeMoves.Add(move);
+
+		UE_LOG(LogTemp, Warning, TEXT("%d"), UnacknowledgeMoves.Num());
+
+		Server_SendMove(move);
 	}
 
 	DrawDebugString(GetWorld(), FVector(0, 0, 240), "Local : " + GetRoleText(GetLocalRole()), this, FColor::Black, DeltaTime, false, 1.2f);
@@ -68,7 +65,6 @@ FVector ADreamCar::GetAirResistance()
 	return -Velocity.GetSafeNormal() * Velocity.SizeSquared() * DragCoefficient;
 }
 
-
 FVector ADreamCar::GetRollingResistance()
 {
 	float minusGravity = -GetWorld()->GetGravityZ() / 100;
@@ -76,19 +72,17 @@ FVector ADreamCar::GetRollingResistance()
 	return -Velocity.GetSafeNormal() * RollingCoefficient * normal;
 }
 
-void ADreamCar::UpdateRotation(float DeltaTime)
+void ADreamCar::UpdateRotation(float DeltaTime, float InSteering)
 {
 	float direction = GetActorForwardVector() | Velocity * DeltaTime;
 
-	float rotationAngle = direction / TurningRadius * Steering;
+	float rotationAngle = direction / TurningRadius * InSteering;
 	FQuat rotationYaw(GetActorUpVector(), rotationAngle);
 
 	Velocity = rotationYaw.RotateVector(Velocity);
 
 	AddActorWorldRotation(rotationYaw);
 }
-
-
 
 void ADreamCar::UpdateLocation(float DeltaTime)
 {
@@ -112,31 +106,75 @@ void ADreamCar::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 void ADreamCar::MoveForward(float Value)
 {
 	Throttle = Value;
-	Server_MoveForward(Value);
 }
 
 void ADreamCar::MoveRight(float Value)
 {
 	Steering = Value;
-	Server_MoveRight(Value);
 }
 
-void ADreamCar::Server_MoveForward_Implementation(float Value)
+void ADreamCar::SimulateMove(const FMoveState& Move)
 {
-	Throttle = Value;
+	FVector force = GetActorForwardVector() * MaxForce * Move.Throttle;
+	force += GetAirResistance();
+	force += GetRollingResistance();
+
+	FVector acceleration = force / Mass;
+	Velocity = Velocity + acceleration * Move.DeltaTime;
+
+	UpdateRotation(Move.DeltaTime, Move.Steering);
+	UpdateLocation(Move.DeltaTime);
 }
 
-void ADreamCar::Server_MoveRight_Implementation(float Value)
+FMoveState ADreamCar::CreateMove(float DeltaTime)
 {
-	Steering = Value;
+	FMoveState move;
+	move.DeltaTime = DeltaTime;
+	move.Throttle = Throttle;
+	move.Steering = Steering;
+	move.Time = GetWorld()->GetGameState()->GetServerWorldTimeSeconds();
+
+	return move;
 }
 
-bool ADreamCar::Server_MoveForward_Validate(float Value)
+void ADreamCar::ClearAcknowledgeMoves(FMoveState LastMove)
 {
-	return FMath::Abs(Value) <= 1;
+	TArray<FMoveState> nakMoves;
+
+	for (const FMoveState& move : UnacknowledgeMoves)
+	{
+		if (move.Time > LastMove.Time)
+		{
+			nakMoves.Add(move);
+		}
+	}
+
+	UnacknowledgeMoves = nakMoves;
 }
 
-bool ADreamCar::Server_MoveRight_Validate(float Value)
+void ADreamCar::Server_SendMove_Implementation(FMoveState Move)
 {
-	return FMath::Abs(Value) <= 1;
+	Throttle = Move.Throttle;
+	Steering = Move.Steering;
+
+	SimulateMove(Move);
+	ServerState.Transform = GetActorTransform();
+	ServerState.Velocity = Velocity;
+}
+
+void ADreamCar::OnRep_ServerState()
+{
+	SetActorTransform(ServerState.Transform);
+	Velocity = ServerState.Velocity;
+
+	ClearAcknowledgeMoves(ServerState.LastMove);
+	for (FMoveState move : UnacknowledgeMoves)
+	{
+		SimulateMove(move);
+	}
+}
+
+bool ADreamCar::Server_SendMove_Validate(FMoveState Move)
+{
+	return true;
 }

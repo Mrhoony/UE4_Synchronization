@@ -4,6 +4,41 @@
 #include "GameFramework/Pawn.h"
 #include "DreamCar.generated.h"
 
+USTRUCT()
+struct FMoveState // Autonomous -> Authority
+{
+	GENERATED_USTRUCT_BODY()
+
+public:
+	UPROPERTY()
+		float Throttle;
+
+	UPROPERTY()
+		float Steering;
+
+	UPROPERTY()
+		float DeltaTime;
+
+	UPROPERTY()
+		float Time;
+};
+
+USTRUCT()
+struct FServerState // Authority -> Simulate
+{
+	GENERATED_USTRUCT_BODY()
+
+public:
+	UPROPERTY()
+		FTransform Transform;
+
+	UPROPERTY()
+		FVector Velocity;
+
+	UPROPERTY()
+		FMoveState LastMove;
+};
+
 UCLASS()
 class GAME_API ADreamCar : public APawn
 {
@@ -23,17 +58,18 @@ private:
 	FVector GetAirResistance();
 	FVector GetRollingResistance();
 	void UpdateLocation(float Value);
-	void UpdateRotation(float Value);
+	void UpdateRotation(float Value, float InSteering);
 
 private:
 	void MoveForward(float Value);
 	void MoveRight(float Value);
 
-	UFUNCTION(Reliable, Server, WithValidation)
-	void Server_MoveForward(float Value);
+	UFUNCTION(Server, Reliable, WithValidation)
+		void Server_SendMove(FMoveState Move);
 
-	UFUNCTION(Reliable, Server, WithValidation)
-	void Server_MoveRight(float Value);
+	void SimulateMove(const FMoveState& LastMove);
+	FMoveState CreateMove(float DeltaTime);
+	void ClearAcknowledgeMoves(FMoveState Move);
 
 private:
 	UPROPERTY(EditAnywhere)
@@ -58,14 +94,18 @@ private:
 		float RollingCoefficient = 0.015f;
 
 private:
-	FVector Velocity;
+	UPROPERTY(ReplicatedUsing = "OnRep_ServerState")
+		FServerState ServerState;
+	UFUNCTION()	void OnRep_ServerState();
 
+private:
+	FVector Velocity;
+	
 	float Throttle;
 	float Steering;
 
-	UPROPERTY(Replicated) // 패킷을 타는 변수
-		FVector ReplicatedLocation;
-	
-	UPROPERTY(Replicated)
-		FRotator ReplicatedRotation;
+	TArray<FMoveState> UnacknowledgeMoves;
+
+	//UPROPERTY(ReplicatedUsing = "OnRep_ReplicatedTransform") // 패킷을 타는 변수
+	//	FTransform ReplicatedTransform;
 };
