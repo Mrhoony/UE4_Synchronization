@@ -21,6 +21,11 @@ public:
 
 	UPROPERTY()
 		float Time;
+
+	bool IsValid() const
+	{
+		return FMath::Abs(Throttle) <= 1 && FMath::Abs(Steering) <= 1;
+	}
 };
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
@@ -55,6 +60,13 @@ private:
 	FMoveState CreateMove(float DeltaTime);
 	void UpdateLocation(float DeltaTime);
 	void UpdateRotation(float DeltaTime, float InSteering);
+
+protected:
+	UPROPERTY(BlueprintReadWrite, EditAnywhere)
+		float MoveCheatValue = 1;
+
+	UPROPERTY(BlueprintReadWrite, EditAnywhere)
+		float TimeCheatValue = 1;
 
 private:
 	UPROPERTY(EditAnywhere)	float Mass = 1000;

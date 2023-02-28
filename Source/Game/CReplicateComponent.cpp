@@ -1,5 +1,6 @@
 #include "CReplicateComponent.h"
 #include "Net/UnrealNetwork.h"
+#include "GameFramework/GameState.h"
 
 UCReplicateComponent::UCReplicateComponent()
 {
@@ -51,6 +52,8 @@ void UCReplicateComponent::Server_SendMove_Implementation(FMoveState Move)
 {
 	if (MovementComponent == nullptr) return;
 
+	ClientSimulateTime += Move.DeltaTime;
+
 	MovementComponent->SimulateMove(Move);
 	UpdateServerState(Move);
 }
@@ -81,10 +84,16 @@ void UCReplicateComponent::AutonomousProxy_OnRep_ServerState()
 
 void UCReplicateComponent::SimulatedProxy_OnRep_ServerState()
 {
+	if (MovementComponent == nullptr) return;
+
 	ClientTimeBetweenLastUpdate = ClientTimeSinceUpdate;
 	ClientTimeSinceUpdate = 0;
 
-	ClientStartLocation = GetOwner()->GetActorLocation();
+	if(MeshOffset != nullptr)
+		ClientStartTransform = MeshOffset->GetComponentTransform();
+	ClientStartVelocity = MovementComponent->GetVelocity();
+	
+	GetOwner()->SetActorTransform(ServerState.Transform);
 }
 
 void UCReplicateComponent::SimulateProxyTick(float DeltaTime)
@@ -92,14 +101,58 @@ void UCReplicateComponent::SimulateProxyTick(float DeltaTime)
 	ClientTimeSinceUpdate += DeltaTime;
 
 	if (ClientTimeBetweenLastUpdate < KINDA_SMALL_NUMBER) return;
+	if (MovementComponent == nullptr) return;
 
-	FVector startLocation = ClientStartLocation;
-	FVector targetLocation = ServerState.Transform.GetLocation();
 	float lerpRatio = ClientTimeSinceUpdate / ClientTimeBetweenLastUpdate;
 
-	FVector newLocation = FMath::LerpStable(startLocation, targetLocation, lerpRatio);
+	FCubicSpline spline = CreateSpline();
+	InterpolateLocation(spline, lerpRatio);
+	InterpolateVelocity(spline, lerpRatio);
+	InterpolateRotation(lerpRatio);
+}
 
-	GetOwner()->SetActorLocation(newLocation);
+FCubicSpline UCReplicateComponent::CreateSpline()
+{
+	FCubicSpline spline;
+	
+	spline.StartLocation = ClientStartTransform.GetLocation();
+	spline.TargetLocation = ServerState.Transform.GetLocation();
+	
+	spline.StartDerivative = ClientStartVelocity * VelocityToDerivative();
+	spline.TargetDerivative = ServerState.Velocity * VelocityToDerivative();
+
+	return spline;
+}
+
+void UCReplicateComponent::InterpolateLocation(const FCubicSpline& Spline, float LerpRatio)
+{
+	FVector newLocation = Spline.InterpolateLocation(LerpRatio);
+
+	if(MeshOffset != nullptr)
+		MeshOffset->SetWorldLocation(newLocation);
+}
+
+void UCReplicateComponent::InterpolateVelocity(const FCubicSpline& Spline, float LerpRatio)
+{
+	FVector newDerivative = Spline.InterpolateDerivative(LerpRatio);
+	FVector newVelocity = newVelocity / VelocityToDerivative();
+	MovementComponent->SetVelocity(newVelocity);
+}
+
+void UCReplicateComponent::InterpolateRotation(float LerpRatio)
+{
+	FQuat startRotation = ClientStartTransform.GetRotation();
+	FQuat targetRotation = ServerState.Transform.GetRotation();
+
+	FQuat newRotation = FQuat::Slerp(startRotation, targetRotation, LerpRatio);
+
+	if (MeshOffset != nullptr)
+		MeshOffset->SetWorldRotation(newRotation);
+}
+
+float UCReplicateComponent::VelocityToDerivative()
+{
+	return ClientTimeBetweenLastUpdate * 100;
 }
 
 void UCReplicateComponent::ClearAcknowledgeMoves(FMoveState LastMove)
@@ -126,5 +179,19 @@ void UCReplicateComponent::UpdateServerState(const FMoveState& Move)
 
 bool UCReplicateComponent::Server_SendMove_Validate(FMoveState Move)
 {
+	bool noTimeCheat = ClientSimulateTime <= GetWorld()->GetGameState()->GetServerWorldTimeSeconds();
+
+	if (noTimeCheat == false)
+	{
+		UE_LOG(LogTemp, Error, TEXT("gorTmwlakfkmm"));
+		return false;
+	}
+
+	if (Move.IsValid() == false)
+	{
+		UE_LOG(LogTemp, Error, TEXT("gorTmwlakfkmm"));
+		return false;
+	}
+
 	return true;
 }

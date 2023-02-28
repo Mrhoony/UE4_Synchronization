@@ -22,11 +22,11 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
+public:
+	UPROPERTY(BlueprintReadOnly, VisibleDefaultsOnly)	UCMovementComponent* MovementComponent;
+	UPROPERTY(BlueprintReadOnly, VisibleDefaultsOnly)	UCReplicateComponent* ReplicateComponent;
+
 private:
 	void MoveForward(float Value);
 	void MoveRight(float Value);
-
-private:
-	UPROPERTY(VisibleDefaultsOnly)	UCMovementComponent* MovementComponent;
-	UPROPERTY(VisibleDefaultsOnly)	UCReplicateComponent* ReplicateComponent;
 };
